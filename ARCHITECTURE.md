@@ -32,14 +32,17 @@ An optional Express backend exists for scenarios where server-side processing or
 ```mermaid
 flowchart TB
     subgraph dataLayer [Data Layer]
-        CSV["citations.csv"]
+        CitationsCSV["citations.csv (40k rows)"]
+        LocationsCSV["locations.csv (148 rows)"]
         PapaParse["PapaParse"]
         DataProcessor["dataProcessor.js"]
+        JoinStep["Join on LOCATION name"]
     end
 
     subgraph stateLayer [State Layer]
         ReactContext["React Context Provider"]
-        RawData["Parsed Citation Records"]
+        RawData["Parsed Citation Records (with coords)"]
+        LocationLookup["Location Lookup Map"]
         Aggregations["Pre-computed Aggregations"]
     end
 
@@ -54,10 +57,15 @@ flowchart TB
         RiskEngine["riskEngine.js"]
     end
 
-    CSV --> PapaParse --> DataProcessor
-    DataProcessor --> RawData
+    CitationsCSV --> PapaParse
+    LocationsCSV --> PapaParse
+    PapaParse --> DataProcessor
+    DataProcessor --> JoinStep
+    JoinStep --> RawData
+    DataProcessor --> LocationLookup
     DataProcessor --> Aggregations
     RawData --> ReactContext
+    LocationLookup --> ReactContext
     Aggregations --> ReactContext
 
     ReactContext --> HeatMap
@@ -84,13 +92,17 @@ sequenceDiagram
     participant Context as React Context
 
     Browser->>PapaParse: fetch & parse citations.csv
-    PapaParse->>DataProcessor: raw rows (auto-typed)
-    DataProcessor->>DataProcessor: parse coordinates (split on comma)
+    Browser->>PapaParse: fetch & parse locations.csv (parallel)
+    PapaParse->>DataProcessor: citation rows (auto-typed)
+    PapaParse->>DataProcessor: location rows (auto-typed)
+    DataProcessor->>DataProcessor: build location lookup map
+    DataProcessor->>DataProcessor: auto-correct bad longitudes
+    DataProcessor->>DataProcessor: join citations with coordinates
     DataProcessor->>DataProcessor: parse dates (M/D/YYYY)
-    DataProcessor->>DataProcessor: cast Warning/Void to booleans
-    DataProcessor->>DataProcessor: handle SECONDS/Coordinates merge edge case
+    DataProcessor->>DataProcessor: cast Warning/Void floats to booleans
     DataProcessor->>DataProcessor: build aggregation maps
     DataProcessor->>Context: citationRecords[]
+    DataProcessor->>Context: locationLookup{}
     DataProcessor->>Context: aggregations{}
     Context->>RiskEngine: aggregations (on demand)
     RiskEngine->>Context: riskScores, insights, alerts
@@ -98,13 +110,13 @@ sequenceDiagram
 
 ### Step-by-step
 
-1. **Fetch CSV** — The browser fetches `public/data/citations.csv` via PapaParse with `dynamicTyping: true` and `header: true`.
-2. **Field parsing** — `dataProcessor.js` iterates each row and:
-   - Splits the `Coordinates` string on `,` into `lat` (float) and `lng` (float).
+1. **Fetch both CSVs** — The browser fetches `public/data/citations.csv` and `public/data/locations.csv` in parallel via PapaParse with `dynamicTyping: true` and `header: true`.
+2. **Build location lookup** — `dataProcessor.js` iterates the location CSV rows and builds a `Map<locationName, { lat, lng }>`. For each row, it parses the `Coordinates` string (splitting on comma) or falls back to `LATITUDE`/`LONGITUDE` columns. Positive longitudes are auto-corrected to negative (data quality fix for `1329 R Street`). ~15 locations with no coordinates are omitted from the map but tracked for stats.
+3. **Join and transform** — For each citation row, `dataProcessor.js`:
+   - Looks up the citation's `LOCATION` in the location map and attaches `lat`/`lng` (or `null` if no match).
    - Parses `Issue Date` from M/D/YYYY into a `Date` object (extracting month/year for trend charts).
-   - Casts `Warning` and `Void` from `0`/`1` integers to booleans.
-   - Validates that `SECONDS` and `Coordinates` are in separate columns; splits on first space if merged.
-3. **Aggregation** — Pre-compute lookup tables:
+   - Casts `Warning` and `Void` from `0.00`/`1.00` floats to booleans (`>= 1`).
+4. **Aggregation** — Pre-compute lookup tables in a single pass over the joined records:
    - `byLocationDayHour`: `Map<"LOC|DAY|HOUR", { count, totalFines, violations, warnings, voids }>` — the primary structure for risk scoring and heatmap filtering.
    - `byDayOfWeek`: citation counts per day (Panel A).
    - `byHour`: citation counts per hour (Panel B).
@@ -114,8 +126,8 @@ sequenceDiagram
    - `warningsByLocation`: warnings vs. citations per location (Panel F).
    - `voidRateByCode`: void count / total count per `CODE` (Panel G).
    - `totalFines`, `avgFine`, `totalCitations`: scalar stats (Panel H).
-4. **Context hydration** — Both the parsed records array and the aggregation maps are stored in a React Context Provider that wraps the entire app.
-5. **Risk engine** — `riskEngine.js` consumes the `byLocationDayHour` map on demand to calculate risk scores and generate insight alerts.
+5. **Context hydration** — The parsed records array, the location lookup map, and the aggregation maps are stored in a React Context Provider that wraps the entire app.
+6. **Risk engine** — `riskEngine.js` consumes the `byLocationDayHour` map on demand to calculate risk scores and generate insight alerts.
 
 ---
 
@@ -182,7 +194,7 @@ Tab navigation bar with three items: **Map**, **Dashboard**, **Alerts**. Fixed a
 #### `HeatMap.jsx`
 
 - Initializes a Leaflet `MapContainer` centered at `[40.824, -96.701]` (Lincoln, NE) with zoom level 16.
-- Renders a `leaflet.heat` heatmap layer from citation coordinate data.
+- Renders a `leaflet.heat` heatmap layer from citation records that have coordinates (joined from the location lookup). Citations with no coordinate match are silently excluded from the heat layer.
 - Exposes filter controls:
   - **Day of week**: toggle button group (Mon–Sun).
   - **Time range**: range slider (0–23 hours).
@@ -243,13 +255,13 @@ Renders a scrollable vertical feed of insight cards. Cards are generated dynamic
 ### `dataProcessor.js`
 
 Responsibilities:
-- **`loadAndParseCitations(csvUrl)`** — Fetches the CSV, runs PapaParse, returns raw rows.
-- **`transformRow(row)`** — Parses a single raw row into a clean citation record object:
-  - Splits `Coordinates` on `,` into `lat`/`lng` floats.
+- **`loadData(citationsUrl, locationsUrl)`** — Fetches both CSVs in parallel via PapaParse, returns raw row arrays for each.
+- **`buildLocationLookup(locationRows)`** — Builds a `Map<locationName, { lat, lng }>` from the location CSV. Parses the `Coordinates` string (splitting on comma) or falls back to `LATITUDE`/`LONGITUDE` columns. Auto-corrects positive longitudes (e.g., `1329 R Street` has `96.70` instead of `-96.70`). Locations with no coordinate data are omitted from the map.
+- **`transformRow(row, locationLookup)`** — Parses a single citation row into a clean record object:
+  - Looks up `row.LOCATION` in `locationLookup` and attaches `lat`/`lng` (or `null` if the location has no coordinates).
   - Parses `Issue Date` into a `Date`, extracts `month` and `year`.
-  - Casts `Warning`/`Void` to booleans.
-  - Handles the SECONDS/Coordinates merge edge case.
-- **`buildAggregations(records)`** — Iterates all records once and builds the aggregation maps described in the Data Flow section.
+  - Casts `Warning`/`Void` from `0.00`/`1.00` floats to booleans (`>= 1`).
+- **`buildAggregations(records)`** — Iterates all records once and builds the aggregation maps described in the Data Flow section. All aggregations include all records regardless of coordinate availability; only the heatmap rendering filters out `null`-coordinate records.
 
 ### `riskEngine.js`
 
@@ -266,6 +278,7 @@ Responsibilities:
 flowchart LR
     subgraph contextProvider [CitationDataProvider]
         citations["citations: CitationRecord[]"]
+        locationLookup["locationLookup: Map of name to coords"]
         aggregations["aggregations: AggregationMaps"]
         loading["loading: boolean"]
         error["error: string | null"]
@@ -288,10 +301,11 @@ flowchart LR
 ```
 
 **Global state** (React Context):
-- `citations` — The full array of parsed citation record objects.
+- `citations` — The full array of parsed citation record objects (each with `lat`/`lng` attached from the location join, or `null` for locations without coordinates).
+- `locationLookup` — The `Map<locationName, { lat, lng }>` built from the location mapping CSV. Used by the heatmap for rendering and by the risk calculator for map interactions.
 - `aggregations` — All pre-computed aggregation maps.
-- `loading` — Boolean flag, true while CSV is being fetched/parsed.
-- `error` — Error message if CSV load fails.
+- `loading` — Boolean flag, true while CSVs are being fetched/parsed/joined.
+- `error` — Error message if either CSV load fails.
 
 **Local state** (component-level `useState`):
 - Filter selections in `HeatMap` (selected days, hour range, violation types).
@@ -338,7 +352,7 @@ flowchart LR
 
 ### `analytics.js`
 
-Server-side equivalent of `dataProcessor.js` and `riskEngine.js`. Loads the CSV on server startup, builds aggregations, and exposes functions consumed by route handlers.
+Server-side equivalent of `dataProcessor.js` and `riskEngine.js`. Loads both CSVs on server startup, builds the location lookup, joins citations to coordinates, builds aggregations, and exposes functions consumed by route handlers.
 
 ---
 
@@ -466,12 +480,14 @@ flowchart TB
 
 ## Performance Considerations
 
-1. **One-time CSV processing** — The CSV is parsed and all aggregations are built once on page load. This takes a few hundred milliseconds for typical campus datasets (5,000–50,000 rows) and produces lookup maps with O(1) access.
+1. **One-time CSV processing** — Both CSVs are fetched in parallel, the location lookup is built (148 rows), and all 40,438 citation records are joined and aggregated once on page load. This takes a few hundred milliseconds and produces lookup maps with O(1) access. The location join itself is O(n) with O(1) map lookups per citation row.
 
-2. **Client-side filtering** — Heatmap filters do not re-parse the CSV. They iterate the already-parsed records array and rebuild the heat layer points. For datasets under 50,000 rows, this is effectively instantaneous.
+2. **Client-side filtering** — Heatmap filters do not re-parse the CSVs. They iterate the already-parsed and joined records array and rebuild the heat layer points. For ~40,000 records this is effectively instantaneous.
 
 3. **Context stability** — The React Context value only changes once (from loading to loaded). Individual components manage their own filter state locally, so filter changes do not trigger re-renders in unrelated components.
 
 4. **Lazy chart rendering** — Dashboard panels only render their Recharts components when the Dashboard tab is active. Combined with pre-computed aggregation data, chart render time is dominated by SVG painting, not data processing.
 
 5. **Heatmap layer recycling** — When filters change, the existing `leaflet.heat` layer is updated with new data points via `setLatLngs()` rather than destroying and recreating the layer, avoiding map flicker.
+
+6. **Graceful missing data** — The ~15 locations with no coordinates are excluded from the heatmap layer but included in all statistical aggregations, charts, and the risk calculator. This avoids data loss while keeping the map rendering clean.
