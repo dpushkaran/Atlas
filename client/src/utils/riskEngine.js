@@ -1,12 +1,23 @@
 export function calculateRisk(location, day, hour, aggregations) {
-  const { byLocationDayHour, maxBucketCount } = aggregations;
-  if (maxBucketCount === 0) return 0;
+  const { byLocationDayHour, byLocation } = aggregations;
+
+  const locData = byLocation.get(location);
+  if (!locData || locData.count === 0) return 0;
+
+  const maxLocCount = Math.max(...[...byLocation.values()].map((v) => v.count));
+  if (maxLocCount === 0) return 0;
 
   const key = `${location}|${day}|${hour}`;
   const bucket = byLocationDayHour.get(key);
-  const count = bucket ? bucket.count : 0;
+  const bucketCount = bucket ? bucket.count : 0;
 
-  return Math.min(100, Math.max(0, (count / maxBucketCount) * 100));
+  // How dangerous is this location overall vs the busiest location
+  const locationRisk = locData.count / maxLocCount;
+  // Of all tickets at this location, what fraction fall in this day+hour
+  const temporalRisk = bucketCount / locData.count;
+
+  const score = (0.4 * locationRisk + 0.6 * temporalRisk) * 100;
+  return Math.min(100, Math.max(0, score));
 }
 
 export function getBucketStats(location, day, hour, aggregations) {
@@ -31,16 +42,15 @@ export function getBucketStats(location, day, hour, aggregations) {
 }
 
 export function getAlternatives(day, hour, aggregations, excludeLocation, limit = 3) {
-  const { byLocationDayHour, maxBucketCount, uniqueLocations } = aggregations;
-  if (maxBucketCount === 0) return [];
+  const { uniqueLocations } = aggregations;
 
   const candidates = [];
   for (const loc of uniqueLocations) {
     if (loc === excludeLocation) continue;
+    const score = calculateRisk(loc, day, hour, aggregations);
     const key = `${loc}|${day}|${hour}`;
-    const bucket = byLocationDayHour.get(key);
+    const bucket = aggregations.byLocationDayHour.get(key);
     const count = bucket ? bucket.count : 0;
-    const score = Math.min(100, Math.max(0, (count / maxBucketCount) * 100));
     candidates.push({ location: loc, score: Math.round(score), count });
   }
 
@@ -63,7 +73,7 @@ export function generateInsights(aggregations) {
   const top5 = buckets.slice(0, 5);
   for (const bucket of top5) {
     const multiplier = avgCount > 0 ? bucket.count / avgCount : 0;
-    const score = Math.round((bucket.count / maxBucketCount) * 100);
+    const score = Math.round(calculateRisk(bucket.location, bucket.dayOfWeek, bucket.hour, aggregations));
 
     insights.push({
       type: 'HIGH_RISK',
