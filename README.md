@@ -63,24 +63,46 @@ A scrollable feed of dynamically generated insight cards that simulate push noti
 
 ## Data Schema
 
-The app ingests a CSV of parking citations. Each row contains:
+The app ingests **two CSV files** that are joined at load time via the `LOCATION` field.
+
+### Citations CSV — `Data/Citations.csv`
+
+~40,438 rows of individual parking citations. Each row contains:
 
 | Field | Type | Example | Parsing Notes |
 |-------|------|---------|---------------|
 | `TICKET_#` | string | `"AE0201711117"` | Alphanumeric unique citation ID |
 | `Issue Date` | string | `"8/22/2023"` | M/D/YYYY format — parse with `new Date(value)` or dayjs |
-| `CODE` | number | `1` | Numeric violation code |
+| `CODE` | number | `1` | Numeric violation code (stored as zero-padded string `01` in CSV) |
 | `Description` | string | `"Overtime"` | Human-readable violation type |
-| `BASE_AMOUNT` | number | `10` | Base fine in dollars |
-| `AMOUNT_DUE` | number | `0` | Total owed — can be 0 for warnings or voided tickets |
-| `LOCATION` | string | `"Outdoor Adventures Center"` | Building or lot name (not a street address) |
-| `Warning` | number (0/1) | `0` | 0 = actual citation, 1 = warning only. Cast: `!!parseInt(value)` |
-| `Void` | number (0/1) | `0` | 0 = valid citation, 1 = voided. Cast: `!!parseInt(value)` |
+| `BASE_AMOUNT` | float | `10.00` | Base fine in dollars |
+| `AMOUNT_DUE` | float | `0.00` | Total owed — can be 0.00 for warnings or voided tickets |
+| `LOCATION` | string | `"Outdoor Adventures Center"` | Building or lot name — **join key** to the location mapping CSV |
+| `Warning` | float (0.00/1.00) | `0.00` | 0 = actual citation, 1 = warning only. Cast: `value >= 1` |
+| `Void` | float (0.00/1.00) | `0.00` | 0 = valid citation, 1 = voided. Cast: `value >= 1` |
 | `DAY_OF_WEEK` | string | `"Tuesday"` | Full day name, capitalized |
 | `HOUR` | number | `15` | 24-hour format (0–23) |
 | `MINUTE` | number | `44` | 0–59 |
 | `SECONDS` | number | `56` | 0–59 |
-| `Coordinates` | string | `"40.82382557, -96.70103789"` | `"lat, lng"` as a single string — split on comma, trim, parse as floats. Campus is in Lincoln, Nebraska. |
+
+Date range in the dataset: **August 22, 2023 – May 9, 2024** (one academic year).
+
+### Location Mapping CSV — `Data/Citation Location.csv`
+
+~148 rows mapping each parking location name to its geographic coordinates.
+
+| Field | Type | Example | Notes |
+|-------|------|---------|-------|
+| *(unnamed first column)* | string | `"Outdoor Adventures Center"` | Location name — **join key** matching `LOCATION` in citations |
+| `LATITUDE` | float | `40.82382557` | Present in some rows, absent in others |
+| `LONGITUDE` | float | `-96.70103789` | Present in some rows, absent in others |
+| `Coordinates` | string | `"40.82382557, -96.70103789"` | `"lat, lng"` as a single string — available for most rows |
+
+**Important notes on the location data:**
+- Some rows have `LATITUDE`/`LONGITUDE` columns populated; others only have the `Coordinates` string. Prefer `Coordinates` and fall back to the individual columns.
+- ~15 locations have **no coordinates at all** (e.g., "15th Street", "Filley Dock", "Plant Science"). These citations can appear in charts and stats but are excluded from the map.
+- **Data quality:** `1329 R Street` has a positive longitude (`96.70187603`) that should be `-96.70187603`. Auto-correct longitudes in the Nebraska campus range (expected ~`-96.xx`).
+- The campus is in **Lincoln, Nebraska** — coordinates cluster around `40.824, -96.701`.
 
 ---
 
@@ -88,6 +110,9 @@ The app ingests a CSV of parking citations. Each row contains:
 
 ```
 parksmart/
+├── Data/                            # Raw data files
+│   ├── Citations.csv                # 40,438 parking citation records
+│   └── Citation Location.csv        # 148 location-to-coordinate mappings
 ├── client/                          # React frontend (Vite)
 │   ├── src/
 │   │   ├── components/
@@ -98,13 +123,14 @@ parksmart/
 │   │   │   ├── RiskGauge.jsx        # Color-coded risk score display
 │   │   │   └── Navbar.jsx           # Navigation between views
 │   │   ├── utils/
-│   │   │   ├── dataProcessor.js     # CSV parsing and data transformation
+│   │   │   ├── dataProcessor.js     # CSV parsing, location join, data transformation
 │   │   │   └── riskEngine.js        # Risk score and insight generation
 │   │   ├── App.jsx
 │   │   └── main.jsx
 │   └── public/
-│       └── data/
-│           └── citations.csv        # Raw citation data
+│       └── data/                    # CSVs copied here for static serving
+│           ├── citations.csv
+│           └── locations.csv
 ├── server/                          # Express backend (optional)
 │   ├── index.js
 │   ├── routes/
@@ -142,10 +168,11 @@ npm install
 
 ### Add Citation Data
 
-Place your campus parking citation CSV file at:
+The raw data files live in `Data/` at the project root. Copy them into the Vite public directory so the frontend can fetch them at runtime:
 
-```
-client/public/data/citations.csv
+```bash
+cp Data/Citations.csv client/public/data/citations.csv
+cp "Data/Citation Location.csv" client/public/data/locations.csv
 ```
 
 ### Run Development Server
@@ -168,42 +195,58 @@ npm run build
 
 ## Key Implementation Notes
 
-### Coordinates Parsing
+### Two-File Data Model and Coordinate Join
 
-The `Coordinates` field is a single string like `"40.82382557, -96.70103789"`. Parse it by splitting on the comma:
+Coordinates are **not** embedded in the citations CSV. They come from the separate location mapping file (`locations.csv`). At load time:
+
+1. Parse both CSVs with PapaParse (`dynamicTyping: true`, `header: true`).
+2. Build a `Map<locationName, { lat, lng }>` from the location CSV.
+3. For each citation row, look up its `LOCATION` in the map to attach `lat`/`lng`.
+4. Citations with no coordinate match (~15 locations) are included in charts and stats but excluded from the heatmap.
 
 ```js
-const [lat, lng] = coord.split(',').map(s => parseFloat(s.trim()));
+// Build location lookup from location CSV
+const locationLookup = new Map();
+locationRows.forEach(row => {
+  const name = row[''] || row[Object.keys(row)[0]]; // unnamed first column
+  const coordStr = row['Coordinates'];
+  if (coordStr) {
+    const [lat, lng] = coordStr.split(',').map(s => parseFloat(s.trim()));
+    const correctedLng = lng > 0 ? -lng : lng; // fix positive longitude errors
+    locationLookup.set(name, { lat, lng: correctedLng });
+  }
+});
 ```
 
 Center the Leaflet map at approximately `[40.824, -96.701]` with zoom level ~16.
 
 ### Warning and Void Fields
 
-These are `0`/`1` integers, not booleans or `"Yes"`/`"No"` strings. Convert during CSV parsing:
+These are `0.00`/`1.00` **floats** in the CSV, not integers or booleans. With PapaParse's `dynamicTyping: true` they parse as numbers. Convert to booleans:
 
 ```js
-const isWarning = value === '1' || value === 1;
+const isWarning = row.Warning >= 1;
+const isVoid = row.Void >= 1;
 ```
 
-Use PapaParse's `dynamicTyping: true` to auto-convert numbers.
+### Fine Amounts
+
+`BASE_AMOUNT` and `AMOUNT_DUE` are **floats** (e.g., `10.00`, `35.00`). When calculating total fines, filter to only non-warning, non-void records where `AMOUNT_DUE > 0`.
 
 ### Date Parsing
 
 `Issue Date` uses M/D/YYYY format (e.g., `"8/22/2023"`). This is not ISO format. `new Date(value)` handles it in most environments, or use dayjs for reliability.
 
-### SECONDS / Coordinates Edge Case
+### Data Quality
 
-In the raw CSV, the `SECONDS` field may appear merged with `Coordinates` as `"56 40.82382557, -96.70103789"`. PapaParse handles this correctly for tab-delimited files, but verify during ingestion. If the fields are merged, split on the first space:
-
-```js
-const [seconds, coordinates] = mergedValue.split(/ (.+)/);
-```
+- `1329 R Street` has a **positive longitude** (`96.70187603`) that should be `-96.70187603`. Auto-correct any longitude that is positive in the Nebraska campus range.
+- ~15 locations in the mapping file have no coordinates at all. These should be gracefully excluded from map rendering but still counted in all statistical aggregations.
 
 ### Performance Strategy
 
-- All filtering is client-side for speed at hackathon scale.
+- All filtering is client-side for speed at hackathon scale (~40,000 records).
 - Pre-compute aggregations on CSV load and store in React Context to avoid re-processing on every filter change.
+- The location join is O(n) with O(1) map lookups per citation row.
 
 ---
 
