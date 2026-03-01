@@ -6,8 +6,6 @@ import {
   getParkingOutcomeStats,
 } from '../utils/parkingOutcomeStore';
 
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
-
 function formatHour(h) {
   if (h === 0) return '12 AM';
   if (h < 12) return `${h} AM`;
@@ -15,11 +13,21 @@ function formatHour(h) {
   return `${h - 12} PM`;
 }
 
+function formatOutcomeTime(outcome) {
+  if (outcome.parkedTime && typeof outcome.parkedTime === 'string') {
+    return outcome.parkedTime;
+  }
+  if (Number.isFinite(outcome.parkedHour)) {
+    return formatHour(outcome.parkedHour);
+  }
+  return 'Unknown time';
+}
+
 export default function Reporting() {
   const { aggregations } = useCitationData();
   const [parkedLocation, setParkedLocation] = useState('');
   const [parkedDate, setParkedDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [parkedHour, setParkedHour] = useState(() => new Date().getHours());
+  const [parkedTime, setParkedTime] = useState('');
   const [gotTicketed, setGotTicketed] = useState(false);
   const [message, setMessage] = useState('');
   const [stats, setStats] = useState(() => getParkingOutcomeStats());
@@ -30,8 +38,8 @@ export default function Reporting() {
     event.preventDefault();
     setMessage('');
 
-    if (!parkedLocation || !parkedDate || !Number.isFinite(parkedHour)) {
-      setMessage('Please provide location, date, and hour.');
+    if (!parkedLocation || !parkedDate || !parkedTime.trim()) {
+      setMessage('Please provide location, date, and time.');
       return;
     }
 
@@ -40,26 +48,14 @@ export default function Reporting() {
       submittedAt: new Date().toISOString(),
       parkedLocation,
       parkedDate,
-      parkedHour,
+      parkedTime: parkedTime.trim(),
       gotTicketed,
     });
 
     setStats(getParkingOutcomeStats());
     setGotTicketed(false);
+    setParkedTime('');
     setMessage('Report submitted. Thank you.');
-  }
-
-  function handleExportOutcomes() {
-    const outcomes = getParkingOutcomes();
-    const blob = new Blob([JSON.stringify(outcomes, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `parking-outcomes-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
   }
 
   return (
@@ -103,16 +99,14 @@ export default function Reporting() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Hour</label>
-                <select
-                  value={parkedHour}
-                  onChange={(e) => setParkedHour(Number(e.target.value))}
+                <label className="text-xs text-slate-400 block mb-1">Time</label>
+                <input
+                  type="text"
+                  value={parkedTime}
+                  onChange={(e) => setParkedTime(e.target.value)}
+                  placeholder="e.g. 1:05 pm"
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {HOURS.map((h) => (
-                    <option key={`report-hour-${h}`} value={h}>{formatHour(h)}</option>
-                  ))}
-                </select>
+                />
               </div>
             </div>
 
@@ -133,13 +127,6 @@ export default function Reporting() {
               >
                 Submit Outcome
               </button>
-              <button
-                type="button"
-                onClick={handleExportOutcomes}
-                className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
-              >
-                Export JSON
-              </button>
             </div>
           </form>
 
@@ -158,7 +145,7 @@ export default function Reporting() {
             <div className="space-y-2">
               {recentOutcomes.map((outcome) => (
                 <div key={outcome.id} className="text-sm text-slate-300 flex items-center justify-between">
-                  <span>{outcome.parkedLocation} · {outcome.parkedDate} · {formatHour(outcome.parkedHour)}</span>
+                  <span>{outcome.parkedLocation} · {outcome.parkedDate} · {formatOutcomeTime(outcome)}</span>
                   <span className={outcome.gotTicketed ? 'text-red-400' : 'text-green-400'}>
                     {outcome.gotTicketed ? 'Ticketed' : 'No ticket'}
                   </span>
