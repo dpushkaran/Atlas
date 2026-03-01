@@ -5,6 +5,7 @@ import HeatMap from './components/HeatMap';
 import RiskCalculator from './components/RiskCalculator';
 import Dashboard from './components/Dashboard';
 import AlertsFeed from './components/AlertsFeed';
+import Reporting from './components/Reporting';
 
 function AppContent() {
   const { loading, error } = useCitationData();
@@ -48,6 +49,7 @@ function AppContent() {
       />
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/alerts" element={<AlertsFeed />} />
+      <Route path="/reporting" element={<Reporting />} />
     </Routes>
   );
 }
