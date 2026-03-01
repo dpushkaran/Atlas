@@ -1,3 +1,74 @@
+# ATLAS Setup Guide
+
+This guide only covers how to set up and run the project after pulling from GitHub.
+
+## Prerequisites
+
+- Node.js 18 or newer
+- npm
+
+## 1) Clone the repository
+
+```bash
+git clone <repo-url>
+cd Atlas
+```
+
+## 2) Install dependencies
+
+```bash
+cd client
+npm install
+```
+
+## 3) Ensure data files are in the app public folder
+
+The frontend expects these files:
+
+- `client/public/data/citations.csv`
+- `client/public/data/locations.csv`
+
+If they are missing, run from the `client/` folder:
+
+```bash
+cp ../Data/Citations.csv public/data/citations.csv
+cp "../Data/Citation Location.csv" public/data/locations.csv
+```
+
+## 4) Run the app
+
+```bash
+npm run dev
+```
+
+Open the URL shown in terminal (usually `http://localhost:5173`).
+
+## 5) Build for production (optional)
+
+```bash
+npm run build
+npm run preview
+```
+
+## Optional environment variable
+
+`VITE_UBER_SERVER_TOKEN` can be set in `client/.env` for live Uber estimates.
+If not set, the app uses fallback pickup-location prediction.
+
+Example `client/.env`:
+
+```env
+VITE_UBER_SERVER_TOKEN=your_token_here
+```
+
+## Troubleshooting
+
+- If data does not load:
+  - confirm you are running from `client/`
+  - confirm both CSV files exist in `client/public/data/`
+- If install fails:
+  - check `node -v` is 18+
+  - delete `client/node_modules` and rerun `npm install`
 # ATLAS — Predictive Parking Citation Tool for Campus Life
 
 **ATLAS (A Tool for Location-Aware Safety)** analyzes historical campus parking citation data to predict when and where students are most likely to receive tickets, and surfaces proactive insights to help students avoid citations and save money.
@@ -109,7 +180,7 @@ Date range in the dataset: **August 22, 2023 – May 9, 2024** (one academic yea
 ## Project Structure
 
 ```
-parksmart/
+Atlas/
 ├── Data/                            # Raw data files
 │   ├── Citations.csv                # 40,438 parking citation records
 │   └── Citation Location.csv        # 148 location-to-coordinate mappings
@@ -120,6 +191,7 @@ parksmart/
 │   │   │   ├── RiskCalculator.jsx   # "Should I Park Here?" panel
 │   │   │   ├── Dashboard.jsx        # Trends & insights charts
 │   │   │   ├── AlertsFeed.jsx       # Proactive insight cards
+│   │   │   ├── Reporting.jsx        # User ticket reporting page
 │   │   │   ├── RiskGauge.jsx        # Color-coded risk score display
 │   │   │   └── Navbar.jsx           # Navigation between views
 │   │   ├── utils/
@@ -131,65 +203,76 @@ parksmart/
 │       └── data/                    # CSVs copied here for static serving
 │           ├── citations.csv
 │           └── locations.csv
-├── server/                          # Express backend (optional)
-│   ├── index.js
-│   ├── routes/
-│   │   ├── citations.js             # Citation data endpoints
-│   │   └── predictions.js           # Risk score endpoints
-│   └── utils/
-│       └── analytics.js             # Server-side data processing
-├── package.json
 └── README.md
 ```
 
 ---
 
-## Getting Started
+## Getting Started (After You Pull From GitHub)
 
 ### Prerequisites
 
 - Node.js >= 18
 - npm
 
-### Installation
+### 1) Clone and enter the project
 
 ```bash
-# Clone the repository
 git clone <repo-url>
-cd parksmart
+cd Atlas
+```
 
-# Install dependencies
-npm install
+### 2) Install dependencies
 
-# Install frontend dependencies
+```bash
 cd client
 npm install
 ```
 
-### Add Citation Data
+### 3) Ensure CSV data files exist in `client/public/data`
 
-The raw data files live in `Data/` at the project root. Copy them into the Vite public directory so the frontend can fetch them at runtime:
+The app reads these exact files at runtime:
+
+- `client/public/data/citations.csv`
+- `client/public/data/locations.csv`
+
+If they are missing, copy from the `Data/` folder:
 
 ```bash
-cp Data/Citations.csv client/public/data/citations.csv
-cp "Data/Citation Location.csv" client/public/data/locations.csv
+cp ../Data/Citations.csv public/data/citations.csv
+cp "../Data/Citation Location.csv" public/data/locations.csv
 ```
 
-### Run Development Server
+### 4) Run the app
 
 ```bash
-# From the client/ directory
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`.
+Open the URL shown in terminal (usually `http://localhost:5173`).
 
-### Build for Production
+### 5) Build for production (optional)
 
 ```bash
-cd client
 npm run build
+npm run preview
 ```
+
+---
+
+## Quick Run Checklist
+
+If the app does not load data, verify all three:
+
+1. You are running commands in `client/`
+2. `client/public/data/citations.csv` exists
+3. `client/public/data/locations.csv` exists
+
+---
+
+## Optional Environment Variable
+
+`VITE_UBER_SERVER_TOKEN` is optional. If it is not set, the app uses pickup-location prediction fallback for Uber cost estimation.
 
 ---
 
