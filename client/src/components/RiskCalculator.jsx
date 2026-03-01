@@ -10,6 +10,11 @@ import {
   getTicketProbabilityConfidence,
 } from '../utils/parkingDecisionEngine';
 import { getRoundTripQuote } from '../services/uberQuoteService';
+import {
+  getParkingOutcomes,
+  saveParkingOutcome,
+  getParkingOutcomeStats,
+} from '../utils/parkingOutcomeStore';
 import RiskGauge from './RiskGauge';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -55,6 +60,12 @@ export default function RiskCalculator() {
   const [uberQuote, setUberQuote] = useState(null);
   const [uberLoading, setUberLoading] = useState(false);
   const [uberError, setUberError] = useState(null);
+  const [parkedLocation, setParkedLocation] = useState('');
+  const [parkedDate, setParkedDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [parkedHour, setParkedHour] = useState(() => new Date().getHours());
+  const [gotTicketed, setGotTicketed] = useState(false);
+  const [outcomeMessage, setOutcomeMessage] = useState('');
+  const [outcomeStats, setOutcomeStats] = useState(() => getParkingOutcomeStats());
 
   const hasSelection = location !== '';
   const safeParkingCost = Math.max(0, Number(parkingCost) || 0);
@@ -117,6 +128,12 @@ export default function RiskCalculator() {
     }
   }, [hasSelection, location, day, hour]);
 
+  useEffect(() => {
+    if (location && !parkedLocation) {
+      setParkedLocation(location);
+    }
+  }, [location, parkedLocation]);
+
   const riskScore = useMemo(() => {
     if (!hasSelection) return 0;
     return calculateRisk(location, day, hour, aggregations);
@@ -174,6 +191,54 @@ export default function RiskCalculator() {
       returnFare: uberQuote.returnFare,
     };
   }, [hasSelection, uberQuote, location, day, hour, durationHours, aggregations, safeParkingCost, stats?.count]);
+
+  function handleOutcomeSubmit(event) {
+    event.preventDefault();
+    setOutcomeMessage('');
+
+    if (!parkedLocation || !parkedDate || !Number.isFinite(parkedHour)) {
+      setOutcomeMessage('Please provide location, date, and hour.');
+      return;
+    }
+
+    const record = {
+      id: crypto.randomUUID(),
+      submittedAt: new Date().toISOString(),
+      parkedLocation,
+      parkedDate,
+      parkedHour,
+      gotTicketed,
+      // Snapshot prediction context so the data can be reused for future model training.
+      context: {
+        selectedLocation: location || null,
+        selectedDay: day || null,
+        selectedHour: hour,
+        riskScore: Math.round(riskScore),
+        ticketProbability: decisionData?.ticketProbability ?? null,
+        parkingEV: decisionData?.parkingEV ?? null,
+        uberEV: decisionData?.uberEV ?? null,
+        recommendation: decisionData?.recommendation ?? null,
+      },
+    };
+
+    saveParkingOutcome(record);
+    setOutcomeStats(getParkingOutcomeStats());
+    setGotTicketed(false);
+    setOutcomeMessage('Feedback saved. Thanks for helping improve future predictions.');
+  }
+
+  function handleExportOutcomes() {
+    const outcomes = getParkingOutcomes();
+    const blob = new Blob([JSON.stringify(outcomes, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `parking-outcomes-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="p-4 space-y-5">
@@ -351,6 +416,87 @@ export default function RiskCalculator() {
                 </div>
               </>
             )}
+          </div>
+
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-4 space-y-3">
+            <h3 className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+              Parking Outcome Feedback
+            </h3>
+            <p className="text-xs text-slate-500">
+              Submit when/where you parked and whether you got ticketed. This builds data for future reinforcement learning.
+            </p>
+
+            <form onSubmit={handleOutcomeSubmit} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Parked Location</label>
+                <select
+                  value={parkedLocation}
+                  onChange={(e) => setParkedLocation(e.target.value)}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select where you parked...</option>
+                  {aggregations.uniqueLocations.map((loc) => (
+                    <option key={`outcome-${loc}`} value={loc}>{loc}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={parkedDate}
+                    onChange={(e) => setParkedDate(e.target.value)}
+                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Hour</label>
+                  <select
+                    value={parkedHour}
+                    onChange={(e) => setParkedHour(Number(e.target.value))}
+                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {HOURS.map((h) => (
+                      <option key={`outcome-hour-${h}`} value={h}>{formatHour(h)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={gotTicketed}
+                  onChange={(e) => setGotTicketed(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500"
+                />
+                I got ticketed
+              </label>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+                >
+                  Submit Outcome
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportOutcomes}
+                  className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+                >
+                  Export JSON
+                </button>
+              </div>
+            </form>
+
+            <div className="text-xs text-slate-500 border-t border-slate-700 pt-2 space-y-1">
+              <p>Collected records: {outcomeStats.total}</p>
+              <p>Ticketed records: {outcomeStats.ticketed} ({(outcomeStats.ticketRate * 100).toFixed(1)}%)</p>
+              {outcomeMessage && <p className="text-slate-300">{outcomeMessage}</p>}
+            </div>
           </div>
 
           {/* Alternatives */}
