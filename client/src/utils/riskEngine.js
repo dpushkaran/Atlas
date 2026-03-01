@@ -16,7 +16,9 @@ export function calculateRisk(location, day, hour, aggregations) {
   // Of all tickets at this location, what fraction fall in this day+hour
   const temporalRisk = bucketCount / locData.count;
 
-  const score = (0.4 * locationRisk + 0.6 * temporalRisk) * 100;
+  const LOCATION_WEIGHT = 0.7;
+  const TEMPORAL_WEIGHT = 0.3;
+  const score = (LOCATION_WEIGHT * locationRisk + TEMPORAL_WEIGHT * temporalRisk) * 100;
   return Math.min(100, Math.max(0, score));
 }
 

@@ -14,3 +14,12 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+## Uber Live Price Integration
+
+To enable live Uber price estimates in the parking decision panel:
+
+1. Copy `.env.example` to `.env`.
+2. Set `VITE_UBER_SERVER_TOKEN` with your approved Uber server token.
+
+If the token is missing, invalid, or live calls fail, the app automatically falls back to mock pricing.

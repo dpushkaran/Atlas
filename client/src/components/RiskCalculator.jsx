@@ -44,7 +44,7 @@ function getDateForSelectedDay(dayName, hour) {
 }
 
 export default function RiskCalculator() {
-  const { aggregations } = useCitationData();
+  const { aggregations, locationLookup } = useCitationData();
 
   const [location, setLocation] = useState('');
   const [day, setDay] = useState('Monday');
@@ -77,6 +77,7 @@ export default function RiskCalculator() {
         const quote = await getRoundTripQuote({
           origin: originAddress,
           destination: location,
+          destinationCoords: locationLookup.get(location) || null,
           datetime,
         });
 
@@ -100,7 +101,7 @@ export default function RiskCalculator() {
     return () => {
       cancelled = true;
     };
-  }, [hasSelection, originAddress, location, day, hour]);
+  }, [hasSelection, originAddress, location, day, hour, locationLookup]);
 
   const riskScore = useMemo(() => {
     if (!hasSelection) return 0;
@@ -326,7 +327,12 @@ export default function RiskCalculator() {
                 </div>
                 <div className="text-xs text-slate-500 space-y-1">
                   <p>Assumes max ticket cost of $50 and ticket-only outcomes.</p>
-                  <p>Uber estimate currently uses mock pricing (outbound {formatCurrency(decisionData.outboundFare)}, return {formatCurrency(decisionData.returnFare)}).</p>
+                  <p>
+                    Uber estimate source: {decisionData.quoteSource === 'uber_api'
+                      ? 'Live Uber API'
+                      : 'Predicted from pickup location'}
+                    {' '}(outbound {formatCurrency(decisionData.outboundFare)}, return {formatCurrency(decisionData.returnFare)}).
+                  </p>
                   <p>Ticket probability confidence: {decisionData.confidence}.</p>
                 </div>
               </>

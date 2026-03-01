@@ -1,6 +1,7 @@
 const BASE_TICKET_PROB_FLOOR = 0.01;
-const DURATION_MULTIPLIER = 0.35;
 const MAX_TICKET_PROB_CAP = 0.95;
+const PRIOR_WEIGHT = 30;
+const LOCATION_PRIOR_BLEND = 0.25;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -25,23 +26,36 @@ export function estimateTicketProbability({
   const key = `${location}|${day}|${hour}`;
   const bucket = aggregations.byLocationDayHour.get(key);
   const locData = aggregations.byLocation.get(location);
-  const maxBucketCount = toFiniteNumber(aggregations.maxBucketCount, 0);
 
-  if (!bucket || !locData || maxBucketCount <= 0) {
+  if (!locData || locData.count <= 0) {
     return BASE_TICKET_PROB_FLOOR;
   }
 
-  const slotRisk = clamp(bucket.count / maxBucketCount, 0, 1);
-  const locationShare = locData.count > 0
-    ? clamp(bucket.count / locData.count, 0, 1)
-    : 0;
+  const slotCount = toFiniteNumber(bucket?.count, 0);
+  const totalCitations = toFiniteNumber(aggregations.totalCitations, 0);
+  const uniqueLocationsCount = Math.max(1, toFiniteNumber(aggregations.uniqueLocations?.length, 1));
+  const globalPerLocationMean = totalCitations > 0
+    ? totalCitations / uniqueLocationsCount
+    : locData.count;
 
+  // Normalize by location volume, then smooth with a campus prior to prevent noisy spikes.
+  const empiricalHourlyRisk = clamp(slotCount / locData.count, 0, 1);
+  const priorHourlyRisk = clamp(globalPerLocationMean > 0 ? slotCount / globalPerLocationMean : 0, 0, 1);
+  const smoothedHourlyRisk = (
+    (slotCount + (PRIOR_WEIGHT * priorHourlyRisk))
+    / (locData.count + PRIOR_WEIGHT)
+  );
+  const normalizedHourlyRisk = clamp(
+    ((1 - LOCATION_PRIOR_BLEND) * smoothedHourlyRisk) + (LOCATION_PRIOR_BLEND * empiricalHourlyRisk),
+    BASE_TICKET_PROB_FLOOR,
+    1,
+  );
+
+  // Convert 1-hour risk to multi-hour risk assuming independent hourly exposure.
   const normalizedDuration = Math.max(0, toFiniteNumber(durationHours, 1));
-  const durationFactor = 1 + (normalizedDuration - 1) * DURATION_MULTIPLIER;
-
-  const baseRisk = 0.7 * slotRisk + 0.3 * locationShare;
+  const probabilityForDuration = 1 - ((1 - normalizedHourlyRisk) ** normalizedDuration);
   const probability = clamp(
-    BASE_TICKET_PROB_FLOOR + (baseRisk * durationFactor),
+    probabilityForDuration,
     BASE_TICKET_PROB_FLOOR,
     MAX_TICKET_PROB_CAP,
   );
