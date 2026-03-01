@@ -4,6 +4,7 @@ import {
   AreaChart, Area, PieChart, Pie, Cell, LineChart, Line, Legend,
 } from 'recharts';
 import { useCitationData } from '../context/CitationDataContext';
+import { buildAggregations } from '../utils/dataProcessor';
 
 const CHART_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#84cc16'];
 const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -176,24 +177,31 @@ function PanelD({ data }) {
   );
 }
 
-// Panel E: Monthly Trend
-function PanelE({ data }) {
+// Panel E: Daily Trend (within selected month)
+function PanelE({ records }) {
   const chartData = useMemo(() => {
-    return [...data.entries()]
+    const byDay = new Map();
+    for (const r of records) {
+      if (!(r.issueDate instanceof Date) || Number.isNaN(r.issueDate.getTime())) continue;
+      const dayKey = r.issueDate.toISOString().slice(0, 10);
+      byDay.set(dayKey, (byDay.get(dayKey) || 0) + 1);
+    }
+
+    return [...byDay.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, count]) => {
-        const [y, m] = month.split('-');
-        const label = new Date(+y, +m - 1).toLocaleString('en', { month: 'short', year: '2-digit' });
-        return { month: label, count };
+      .map(([dayKey, count]) => {
+        const [year, month, day] = dayKey.split('-').map(Number);
+        const label = new Date(year, month - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return { day: label, count };
       });
-  }, [data]);
+  }, [records]);
 
   return (
-    <ChartCard title="Monthly Trend" subtitle="Citation volume over the school year">
+    <ChartCard title="Daily Trend" subtitle="Reported ticket volume by day in this month">
       <ResponsiveContainer>
         <LineChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-          <XAxis dataKey="month" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+          <XAxis dataKey="day" tick={{ fill: '#94a3b8', fontSize: 11 }} interval={2} />
           <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
           <Tooltip content={<CustomTooltip />} />
           <Line type="monotone" dataKey="count" name="Citations" stroke="#8b5cf6" strokeWidth={2} dot={{ fill: '#8b5cf6', r: 4 }} />
@@ -310,21 +318,65 @@ function PanelH({ totalFines, avgFine, totalCitations }) {
 }
 
 export default function Dashboard() {
-  const { aggregations } = useCitationData();
-  const { byDayOfWeek, byHour, byLocation, byViolation, byMonth, warningsByLocation, voidRateByCode, totalFines, avgFine, totalCitations } = aggregations;
+  const { citations, aggregations } = useCitationData();
+  const { monthlyDemoAggregations, selectedMonthKey, monthlyRecords } = useMemo(() => {
+    const monthCounts = new Map();
+    for (const c of citations) {
+      if (!c?.monthKey) continue;
+      monthCounts.set(c.monthKey, (monthCounts.get(c.monthKey) || 0) + 1);
+    }
+
+    if (monthCounts.size === 0) {
+      return { monthlyDemoAggregations: aggregations, selectedMonthKey: null, monthlyRecords: [] };
+    }
+
+    // Pick one real month as a demo student-reporting dataset.
+    const selected = [...monthCounts.entries()]
+      .sort(([a], [b]) => b.localeCompare(a))[0][0];
+    const monthlyRecords = citations.filter((c) => c.monthKey === selected);
+
+    return {
+      monthlyDemoAggregations: buildAggregations(monthlyRecords),
+      selectedMonthKey: selected,
+      monthlyRecords,
+    };
+  }, [citations, aggregations]);
+
+  const {
+    byDayOfWeek,
+    byHour,
+    byLocation,
+    byViolation,
+    warningsByLocation,
+    voidRateByCode,
+    totalFines,
+    avgFine,
+    totalCitations,
+  } = monthlyDemoAggregations;
+
+  const selectedMonthLabel = useMemo(() => {
+    if (!selectedMonthKey) return 'Unknown month';
+    const [year, month] = selectedMonthKey.split('-');
+    return new Date(Number(year), Number(month) - 1).toLocaleString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    });
+  }, [selectedMonthKey]);
 
   return (
     <div className="flex-1 overflow-y-auto p-4 lg:p-6">
       <div className="max-w-7xl mx-auto">
         <h1 className="text-xl font-semibold text-slate-100 mb-1">Trends & Insights</h1>
-        <p className="text-sm text-slate-400 mb-6">Data from {totalCitations.toLocaleString()} parking citations (Aug 2023 – May 2024)</p>
+        <p className="text-sm text-slate-400 mb-6">
+          Student reporting view (demo): {totalCitations.toLocaleString()} reports from {selectedMonthLabel}
+        </p>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <PanelA data={byDayOfWeek} />
           <PanelB data={byHour} />
           <PanelC data={byLocation} />
           <PanelD data={byViolation} />
-          <PanelE data={byMonth} />
+          <PanelE records={monthlyRecords} />
           <PanelF data={warningsByLocation} />
           <PanelG data={voidRateByCode} />
           <PanelH totalFines={totalFines} avgFine={avgFine} totalCitations={totalCitations} />
