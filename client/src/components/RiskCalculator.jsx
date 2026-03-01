@@ -103,6 +103,20 @@ export default function RiskCalculator() {
     };
   }, [hasSelection, originAddress, location, day, hour, locationLookup]);
 
+  useEffect(() => {
+    if (!hasSelection) return;
+    try {
+      localStorage.setItem('atlas:lastRiskSelection', JSON.stringify({
+        location,
+        day,
+        hour,
+        savedAt: new Date().toISOString(),
+      }));
+    } catch {
+      // Ignore storage errors in private mode / restrictive environments.
+    }
+  }, [hasSelection, location, day, hour]);
+
   const riskScore = useMemo(() => {
     if (!hasSelection) return 0;
     return calculateRisk(location, day, hour, aggregations);

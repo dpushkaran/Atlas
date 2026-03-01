@@ -60,8 +60,30 @@ export function getAlternatives(day, hour, aggregations, excludeLocation, limit 
   return candidates.slice(0, limit);
 }
 
-export function generateInsights(aggregations) {
-  const { byLocationDayHour, totalCitations, maxBucketCount } = aggregations;
+function relevanceForInsight(insight, { focusLocation, focusDay, focusHour }) {
+  let score = 0;
+
+  if (focusLocation && insight.location && insight.location === focusLocation) {
+    score += 2;
+  }
+  if (focusDay && insight.day && insight.day === focusDay) {
+    score += 1;
+  }
+  if (Number.isFinite(focusHour) && Number.isFinite(insight.hour)) {
+    const delta = Math.abs(insight.hour - focusHour);
+    if (delta === 0) score += 1.5;
+    else if (delta === 1) score += 1;
+    else if (delta === 2) score += 0.5;
+  }
+
+  return score;
+}
+
+export function generateInsights(
+  aggregations,
+  { focusLocation = null, focusDay = null, focusHour = null } = {},
+) {
+  const { byLocationDayHour, totalCitations } = aggregations;
   if (totalCitations === 0) return [];
 
   const buckets = [...byLocationDayHour.entries()]
@@ -133,6 +155,18 @@ export function generateInsights(aggregations) {
     }
   }
 
-  insights.sort((a, b) => b.severity - a.severity);
-  return insights;
+  const ranked = insights
+    .map((insight) => {
+      const relevanceScore = relevanceForInsight(insight, { focusLocation, focusDay, focusHour });
+      const priorityScore = insight.severity * (1 + (0.35 * relevanceScore));
+      return { ...insight, relevanceScore, priorityScore };
+    })
+    .sort((a, b) => {
+      if (b.priorityScore !== a.priorityScore) {
+        return b.priorityScore - a.priorityScore;
+      }
+      return b.severity - a.severity;
+    });
+
+  return ranked;
 }
