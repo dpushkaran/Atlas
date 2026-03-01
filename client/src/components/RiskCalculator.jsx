@@ -325,10 +325,6 @@ export default function RiskCalculator() {
                       : `${(decisionData.breakEvenProbability * 100).toFixed(1)}%`}
                   </span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">Current estimate source</span>
-                  <span className="text-slate-200 font-medium">{decisionData.quoteSource}</span>
-                </div>
                 <div className="pt-2 border-t border-slate-700">
                   <p className="text-sm text-slate-200 font-semibold">
                     Recommendation: {decisionData.recommendation === 'PARK' ? 'Park' : 'Take Uber'}
@@ -341,12 +337,7 @@ export default function RiskCalculator() {
                 </div>
                 <div className="text-xs text-slate-500 space-y-1">
                   <p>Assumes max ticket cost of $50 and ticket-only outcomes.</p>
-                  <p>
-                    Uber estimate source: {decisionData.quoteSource === 'uber_api'
-                      ? 'Live Uber API'
-                      : 'Predicted from pickup location'}
-                    {' '}(outbound {formatCurrency(decisionData.outboundFare)}, return {formatCurrency(decisionData.returnFare)}).
-                  </p>
+                  <p>Uber estimate (outbound {formatCurrency(decisionData.outboundFare)}, return {formatCurrency(decisionData.returnFare)}).</p>
                   <p>Ticket probability confidence: {decisionData.confidence}.</p>
                 </div>
               </>
